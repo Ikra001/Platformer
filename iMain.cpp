@@ -1461,7 +1461,7 @@ void iMouseMove(int mx, int my)
         {
             showBoxSettings = true;
         }
-        else if ((mx >= 1512 - 400 && mx <= 1512 - 400 + 62) && (my >= 100 && my <= 100 + 62)) // Settings
+        else if ((mx >= 1512 - 400 && mx <= 1512 - 400 + 62) && (my >= 100 && my <= 100 + 62)) // Leaderboard
         {
             showBoxLeaderboard = true;
         }

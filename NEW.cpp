@@ -30,9 +30,6 @@
 #define JUMP_VELOCITY 14
 #define TERMINAL_VELOCITY -12
 
-std::chrono::high_resolution_clock::time_point lastFrameTime = std::chrono::high_resolution_clock::now();
-const int FRAME_DURATION = 1000 / 60;
-
 enum Objects
 {
     Coin = 9,
@@ -111,7 +108,8 @@ int gameState = Menu;
 bool isNewGame = true;
 
 bool soundON = true;
-int bgSound, bgSound2, bgSound3, bgVol = 30, lastPlayedSound;
+int bgSound, bgSound2, bgSound3, bgVol = 70, lastPlayedSound, l1sound, l2sound, l3sound;
+int currentMenuMusic = 0;
 char bgVolStr[5];
 
 Image coin[7], shuriken[7], portalG[8], regainLife[7];
@@ -186,7 +184,7 @@ void load_objects()
 
     for (int i = 0; i < 7; i++)
     {
-        sprintf(regainLife_images[i], "assets/Images/Sprites/regain_life/regainLife%02d.jpg", i);
+        sprintf(regainLife_images[i], "assets/Images/Sprites/regain_life/regainLife%02d.png", i);
         iLoadImage(&regainLife[i], regainLife_images[i]);
     }
 }
@@ -335,6 +333,17 @@ void changeMap(int level)
 
 void showPlatform()
 {
+    static int starFrame = 0;
+    starFrame++;
+    iSetColor(80, 80, 120);
+    for (int i = 0; i < 100; i++)
+    {
+        int starX = (i * 137 + starFrame/2) % VIEW_WIDTH;
+        int starY = (i * 89 + 100 + starFrame/3) % VIEW_HEIGHT;
+        int brightness = 50 + (starFrame + i*13) % 100;
+        iSetColor(brightness, brightness, brightness + 50);
+        iFilledCircle(starX, starY, 1 + (i%3));
+    }
         for (int i = 0; i < HEIGHT / Tile_Size; i++) // Tiles (Platform)
         for (int j = 0; j < WIDTH / Tile_Size; j++)
             if (map[i][j] == 1)
@@ -775,14 +784,7 @@ void showInstructionsPage()
 }
 void showCredits()
 {
-    iTextAdvanced(480, 550, "Credits", 0.5, 3.0);
-    iTextAdvanced(345, 530, "__________", 0.5, 3.0);
-
-    iTextAdvanced(100, 250, "Snehashis Balo", 0.4, 2.5);
-    iTextAdvanced(100, 200, "ID: 2405069", 0.3, 1.5);
-
-    iTextAdvanced(740, 250, "Abdullah Ikra", 0.4, 2.5);
-    iTextAdvanced(740, 200, "ID: 2405070", 0.3, 1.5);
+    iShowLoadedImage(0, 0, &creds_page);
 }
 
 void showSettings()
@@ -863,6 +865,10 @@ void showBoxes()
     {
         iFilledRectangle(1512 - 400, 30, 62, 62);
     }
+    else if (showBoxLeaderboard) // Leaderboard
+    {
+        iFilledRectangle(1512 - 400, 100, 62, 62);
+    }
 }
 
 void showIconBox()
@@ -872,14 +878,14 @@ void showIconBox()
     if (!soundON)
         iLine(1520 - 400 + 4, 824 - 225, 1566 - 400 + 4, 870 - 225); // Mark
     iRectangle(1512 - 400, 30, 62, 62);                              // Settings Icon Box
-    iFilledRectangle(1512-400, 100, 62, 62);
+    iRectangle(1512 - 400, 100, 62, 62); // Leaderboard
 }
 
 void showIcons()
 {
-    iShowLoadedImage(1516 - 400 + 5, 822 - 225, &sound_icon);
-    iShowLoadedImage(1512 - 400 + 6, 30 + 6, &settings_icon);
-    iShowLoadedImage(1512 - 400 + 6, 100 + 6, &high_score_icon);
+    iShowLoadedImage(1516 - 400 + 5, 822 - 225, &sound_icon); // Sound
+    iShowLoadedImage(1512 - 400 + 6, 30 + 6, &settings_icon); // Settings
+    iShowLoadedImage(1512 - 400 + 5, 100 + 6, &high_score_icon); // Leaderboard
 }
 
 void displayWord(int wordIndex)
@@ -1161,6 +1167,58 @@ void cleanup()
     
 }
 
+void updateLevelMusic()
+{
+    if (gameState == Play && soundON)
+    {
+        iPauseSound(bgSound);
+        iPauseSound(bgSound2);
+        iPauseSound(bgSound3);
+
+        iPauseSound(l1sound);
+        iPauseSound(l2sound);
+        iPauseSound(l3sound);
+
+        switch (gameLevel)
+        {
+        case 1:
+            iResumeSound(l1sound);
+            break;
+        case 2:
+            iResumeSound(l2sound);
+            break;
+        case 3:
+            iResumeSound(l3sound);
+            break;
+        }
+    }
+    else if (gameState != Play && soundON)
+    {
+        iPauseSound(l1sound);
+        iPauseSound(l2sound);
+        iPauseSound(l3sound);
+
+        switch (currentMenuMusic)
+        {
+        case 0:
+            iResumeSound(bgSound);
+            iPauseSound(bgSound2);
+            iPauseSound(bgSound3);
+            break;
+        case 1:
+            iPauseSound(bgSound);
+            iResumeSound(bgSound2);
+            iPauseSound(bgSound3);
+            break;
+        case 2:
+            iPauseSound(bgSound);
+            iPauseSound(bgSound2);
+            iResumeSound(bgSound3);
+            break;
+        }
+    }
+}
+
 void setLevel(int level, int x_tile, int y_tile)
 {
     saveMapData(p1.name, p1.level);
@@ -1170,6 +1228,7 @@ void setLevel(int level, int x_tile, int y_tile)
 
     p1.coor_x = x_tile * Tile_Size;
     p1.coor_y = y_tile * Tile_Size;
+    updateLevelMusic();
 }
 
 void checkObject(player *p)
@@ -1190,7 +1249,7 @@ void checkObject(player *p)
         coin_counter++;
         p1.score += 100;
         map[y_tile][x_tile] = 0;
-        iPlaySound("assets/Sounds/coin_collected.wav", false, 70);
+        iPlaySound("assets/Sounds/coin_collected.wav", false, 40);
         (*p).coins = coin_counter;
         displayWord(0);  // Show "COIN COLLECTED!"
     }
@@ -1199,7 +1258,7 @@ void checkObject(player *p)
         coin_counter++;
         p1.score += 50;
         map[y_tile][x_tile_r] = 0;
-        iPlaySound("assets/Sounds/coin_collected.wav", false, 70);
+        iPlaySound("assets/Sounds/coin_collected.wav", false, 40);
         (*p).coins = coin_counter;
         displayWord(0);  // Show "COIN COLLECTED!"
     }
@@ -1209,6 +1268,10 @@ void checkObject(player *p)
     {
         map[y_tile][x_tile] = 0;
         life--;
+        if (p1.score >= 100)
+            p1.score -= 100;
+        else
+            p1.score = 0;
         (*p).player_life = life;
         displayWord(1);  // Show "LIFE LOST! BE CAREFUL..."
     }
@@ -1291,12 +1354,6 @@ void input_name()
 
 void iDraw()
 {
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    auto deltaTime = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastFrameTime);
-    
-    if (deltaTime.count() < FRAME_DURATION) return; 
-    lastFrameTime = currentTime;
-
     if (gameState == Play) {
         moveCam();
     }
@@ -1355,32 +1412,34 @@ void iKeyboard(unsigned char key)
         {   
             savePlayerData(p1);
             saveMapData(p1.name, p1.level);
-            //cleanup();
             gameState = Menu;
+            updateLevelMusic();
         }
         else if( gameState == Blank)
         {
-            //cleanup();
             savePlayerData(p1);
             saveMapData(p1.name, p1.level);
-
             life = 3;
             gameState = Leaderboard;
+            updateLevelMusic();
 
         }
         break;
     case 'm':
-        if (soundON)
+        if (gameState != NameInput)    
         {
-            iPauseSound(bgSound);
-            iPauseSound(bgSound2);
-            iPauseSound(bgSound3);
-            soundON = false;
-        }
-        else
-        {
-            iResumeSound(lastPlayedSound);
-            soundON = true;
+            if (soundON)
+            {
+                iPauseSound(bgSound);
+                iPauseSound(bgSound2);
+                iPauseSound(bgSound3);
+                soundON = false;
+            }
+            else
+            {
+                soundON = true;
+                updateLevelMusic();
+            }
         }
     }
     if (gameState == Settings && soundON)
@@ -1388,22 +1447,31 @@ void iKeyboard(unsigned char key)
         switch (key)
         {
         case '0':
-            iResumeSound(bgSound);
-            iPauseSound(bgSound2);
-            iPauseSound(bgSound3);
-            lastPlayedSound = bgSound;
+            currentMenuMusic = 0;
+            if (gameState != Play)
+            {
+                iResumeSound(bgSound);
+                iPauseSound(bgSound2);
+                iPauseSound(bgSound3);
+            }
             break;
         case '1':
-            iPauseSound(bgSound);
-            iResumeSound(bgSound2);
-            iPauseSound(bgSound3);
-            lastPlayedSound = bgSound2;
+            currentMenuMusic = 1;
+            if (gameState != Play)
+            {
+                iPauseSound(bgSound);
+                iResumeSound(bgSound2);
+                iPauseSound(bgSound3);
+            }
             break;
         case '2':
-            iPauseSound(bgSound);
-            iPauseSound(bgSound2);
-            iResumeSound(bgSound3);
-            lastPlayedSound = bgSound3;
+            currentMenuMusic = 2;
+            if (gameState != Play)
+            {
+                iPauseSound(bgSound);
+                iPauseSound(bgSound2);
+                iResumeSound(bgSound3);
+            }
             break;
         }
     }
@@ -1433,6 +1501,7 @@ void iKeyboard(unsigned char key)
                 changeMap(p1.level);
                 savePlayerData(p1); // Save the new player's data
                 gameState = Play;
+                updateLevelMusic();
             }
             else
             {
@@ -1449,6 +1518,7 @@ void iKeyboard(unsigned char key)
                     }
 
                     gameState = Play;
+                    updateLevelMusic();
                 }
                 else
                 {
@@ -1465,6 +1535,7 @@ void iKeyboard(unsigned char key)
                     savePlayerData(p1);
                     changeMap(p1.level);
                     gameState = Play;
+                    updateLevelMusic();
                 }
             }
         }
@@ -1535,7 +1606,7 @@ void iMouseMove(int mx, int my)
         {
             showBoxSettings = true;
         }
-        else if ((mx >= 1512 - 400 && mx <= 1512 - 400 + 62) && (my >= 100 && my <= 100 + 62)) // Settings
+        else if ((mx >= 1512 - 400 && mx <= 1512 - 400 + 62) && (my >= 100 && my <= 100 + 62)) // Leaderboard
         {
             showBoxLeaderboard = true;
         }
@@ -1589,12 +1660,15 @@ void iMouse(int button, int state, int mx, int my)
                     iPauseSound(bgSound);
                     iPauseSound(bgSound2);
                     iPauseSound(bgSound3);
+                    iPauseSound(l1sound);
+                    iPauseSound(l2sound);
+                    iPauseSound(l3sound);
                     soundON = false;
                 }
                 else
                 {
-                    iResumeSound(lastPlayedSound);
                     soundON = true;
+                    updateLevelMusic();
                 }
             }
             else if ((mx >= 1512 - 400 && mx <= 1512 - 400 + 62) && (my >= 30 && my <= 30 + 62)) // Settings
@@ -1703,19 +1777,27 @@ void keyTimer() // 10ms
 
 void initSound()
 {
-    bgSound = iPlaySound("assets/Sounds/backgroundmusics/watch_dogs_suspense.wav", true, bgVol);
+    bgSound = iPlaySound("assets/Sounds/backgroundmusics/menuClairAlicia.wav", true, bgVol);
     bgSound2 = iPlaySound("assets/Sounds/backgroundmusics/act_so_sus.wav", true, bgVol);
     bgSound3 = iPlaySound("assets/Sounds/backgroundmusics/caramelldansen.wav", true, bgVol);
 
-    lastPlayedSound = bgSound;
+    l1sound = iPlaySound("assets/Sounds/levelbgm/ClairGustave.wav", true, bgVol);
+    l2sound = iPlaySound("assets/Sounds/levelbgm/ClairLumiere.wav", true, bgVol);
+    l3sound = iPlaySound("assets/Sounds/levelbgm/ClairOurDraftsUnite.wav", true, bgVol);
+
+    currentMenuMusic = 0;
+
     iPauseSound(bgSound2);
     iPauseSound(bgSound3);
+    iPauseSound(l1sound);
+    iPauseSound(l2sound);
+    iPauseSound(l3sound);
 }
 
-void addScore() // 500ms
+void addScore() // 750ms
 {
     if (p1.run != 0)
-        p1.score += 2;
+        p1.score += 1;
 }
 
 int main(int argc, char *argv[])
@@ -1731,7 +1813,7 @@ int main(int argc, char *argv[])
     iSetTimer(10, gameLogic);
     iSetTimer(10, keyTimer);
     iSetTimer(150, updateObjectsIndices);
-    iSetTimer(500, addScore);
+    iSetTimer(750, addScore);
 
     iInitializeSound();
     initSound();
