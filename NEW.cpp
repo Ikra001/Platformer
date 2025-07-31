@@ -5,15 +5,14 @@
 #include <iostream>
 #include <chrono>
 
+#define max(a, b) (((a) > (b)) ? (a) : (b))
 
-#define max(a,b) (((a) > (b)) ? (a) : (b))
-
-#ifdef _WIN32         
-    #include <io.h>   
-    #define UNLINK _unlink 
-#else                
-    #include <unistd.h> 
-    #define UNLINK unlink  
+#ifdef _WIN32
+#include <io.h>
+#define UNLINK _unlink
+#else
+#include <unistd.h>
+#define UNLINK unlink
 #endif
 
 #define WIDTH 1600
@@ -49,8 +48,9 @@ enum State
     Settings = 4,
     Continue = 5,
     NameInput = 6,
-    Blank = 7,
-    Leaderboard = 8
+    Died = 7,
+    Leaderboard = 8,
+    Win = 9
 };
 
 enum Direction
@@ -86,7 +86,8 @@ typedef struct
 
 } player;
 
-struct Particle {
+struct Particle
+{
     float x, y, vx, vy;
     int life;
     int color[3];
@@ -96,7 +97,7 @@ std::vector<Particle> particles;
 
 // Declarations
 player p1;
-Image tile, menu, settings_page, death_screen, sound_icon, settings_icon, high_score_icon, ins_page, creds_page;
+Image tile, menu, settings_page, death_screen, sound_icon, settings_icon, high_score_icon, ins_page, creds_page, win_screen;
 int idle_index = 0;
 int life = 3;
 char playerNameInput[50] = {0};
@@ -118,11 +119,11 @@ char coin_images[7][50], shuriken_images[7][50], portalG_images[8][50], regainLi
 int coin_counter = 0;
 int regainLife_counter = 0;
 int coinSound;
-int word_counter = -1; 
+int word_counter = -1;
 char word[5][50] = {"COIN COLLECTED!", "LIFE LOST! BE CAREFUL...", "HEALTH REGAINED!!", "CHANGED MAP", "LIFE ALREADY FULL!!"};
 bool wordShow = false;
 int wordDisplayTimer = 0;
-const int WORD_DISPLAY_DURATION = 60; 
+const int WORD_DISPLAY_DURATION = 60;
 int camX = 0, camY = 0;
 
 bool showBoxLeaderboard = false;
@@ -132,21 +133,23 @@ int leaderboardScroll = 0;
 
 int maxScrollY = 200;
 
-
-void moveCam() {
+void moveCam()
+{
     int targetX = p1.coor_x - VIEW_WIDTH / 2;
     int targetY = p1.coor_y - VIEW_HEIGHT / 2;
-    
+
     targetX = max(0, min(targetX, WIDTH - VIEW_WIDTH));
     targetY = max(0, min(targetY, HEIGHT - VIEW_HEIGHT));
-    
+
     float smoothing = 0.08f;
     camX += (int)((targetX - camX) * smoothing);
     camY += (int)((targetY - camY) * smoothing);
-    
+
     // Prevent micro-movements
-    if (abs(targetX - camX) < 2) camX = targetX;
-    if (abs(targetY - camY) < 2) camY = targetY;
+    if (abs(targetX - camX) < 2)
+        camX = targetX;
+    if (abs(targetY - camY) < 2)
+        camY = targetY;
 }
 
 void loadResources()
@@ -161,6 +164,7 @@ void loadResources()
     iScaleImage(&high_score_icon, 3.0);
     iLoadImage(&ins_page, "assets/Page/instructions_page.jpg");
     iLoadImage(&creds_page, "assets/Page/credits_page.jpg");
+    iLoadImage(&win_screen, "assets/Page/win_screen.jpeg");
 }
 
 void load_objects()
@@ -180,7 +184,6 @@ void load_objects()
         sprintf(portalG_images[i], "assets/Images/Sprites/Portal/portalG%03d.png", i);
         iLoadImage(&portalG[i], portalG_images[i]);
     }
-    
 
     for (int i = 0; i < 7; i++)
     {
@@ -297,18 +300,16 @@ const int map3[HEIGHT / Tile_Size][WIDTH / Tile_Size] = {
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
     {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}};
 
-    
-
 void changeMap(int level)
 {
     int row = HEIGHT / Tile_Size;
     int col = WIDTH / Tile_Size;
 
-    if (level < 1 || level > 3) {
+    if (level < 1 || level > 3)
+    {
         printf("Invalid level: %d\n", level);
         level = 1; // Default to level 1
     }
-
 
     switch (level)
     {
@@ -338,44 +339,42 @@ void showPlatform()
     iSetColor(80, 80, 120);
     for (int i = 0; i < 100; i++)
     {
-        int starX = (i * 137 + starFrame/2) % VIEW_WIDTH;
-        int starY = (i * 89 + 100 + starFrame/3) % VIEW_HEIGHT;
-        int brightness = 50 + (starFrame + i*13) % 100;
+        int starX = (i * 137 + starFrame / 2) % VIEW_WIDTH;
+        int starY = (i * 89 + 100 + starFrame / 3) % VIEW_HEIGHT;
+        int brightness = 50 + (starFrame + i * 13) % 100;
         iSetColor(brightness, brightness, brightness + 50);
-        iFilledCircle(starX, starY, 1 + (i%3));
+        iFilledCircle(starX, starY, 1 + (i % 3));
     }
-        for (int i = 0; i < HEIGHT / Tile_Size; i++) // Tiles (Platform)
+    for (int i = 0; i < HEIGHT / Tile_Size; i++) // Tiles (Platform)
         for (int j = 0; j < WIDTH / Tile_Size; j++)
             if (map[i][j] == 1)
                 iShowLoadedImage(j * Tile_Size - camX, (HEIGHT / Tile_Size - i - 1) * Tile_Size - camY, &tile);
 
-        for (int i = 0; i < HEIGHT / Tile_Size; i++) // Objects
+    for (int i = 0; i < HEIGHT / Tile_Size; i++) // Objects
+    {
+        for (int j = 0; j < WIDTH / Tile_Size; ++j)
         {
-            for (int j = 0; j < WIDTH / Tile_Size; ++j)
+            int tile = map[i][j];
+            float x_tile = j * Tile_Size - camX;
+            float y_tile = (HEIGHT / Tile_Size - 1 - i) * Tile_Size - camY;
+            switch (tile)
             {
-                int tile = map[i][j];
-                float x_tile = j * Tile_Size - camX;
-                float y_tile = (HEIGHT / Tile_Size - 1 - i) * Tile_Size - camY;
-                switch (tile)
-                {
-                case Coin:
-                    iShowLoadedImage(x_tile, y_tile, &coin[coin_index]);
-                    break;
-                case Shuriken:
-                    iShowLoadedImage(x_tile, y_tile, &shuriken[shuriken_index]);
-                    break;
-                case PortalG:
-                    iShowLoadedImage(x_tile, y_tile, &portalG[portal_index]);
-                    break;
-                case Health:
-                    iShowLoadedImage(x_tile, y_tile, &regainLife[regainLife_index]);
-                    break;
-                }
+            case Coin:
+                iShowLoadedImage(x_tile, y_tile, &coin[coin_index]);
+                break;
+            case Shuriken:
+                iShowLoadedImage(x_tile, y_tile, &shuriken[shuriken_index]);
+                break;
+            case PortalG:
+                iShowLoadedImage(x_tile, y_tile, &portalG[portal_index]);
+                break;
+            case Health:
+                iShowLoadedImage(x_tile, y_tile, &regainLife[regainLife_index]);
+                break;
             }
         }
+    }
 }
-
-
 
 bool activeP1 = true;
 
@@ -457,7 +456,6 @@ void motionIndex(player *p)
     }
 }
 
-
 bool isSolid(int x_map, int y_flipped_map)
 {
     if (x_map < 0 || x_map >= WIDTH / Tile_Size || y_flipped_map < 0 || y_flipped_map >= HEIGHT / Tile_Size)
@@ -481,12 +479,13 @@ bool checkOnGround(player *p)
     return false;
 }
 
-
-std::vector<player> getSortedPlayers() {
+std::vector<player> getSortedPlayers()
+{
     std::vector<player> players;
     FILE *fptr = fopen("./game_data/player_info.txt", "r");
-    
-    if (fptr != NULL) {
+
+    if (fptr != NULL)
+    {
         player p;
         while (fscanf(fptr, "%49[^,],%d,%d,%d,%d,%d,%d\n",
                       p.name,
@@ -495,85 +494,93 @@ std::vector<player> getSortedPlayers() {
                       &p.coor_x,
                       &p.coor_y,
                       &p.coins,
-                      &p.player_life) == 7) {
+                      &p.player_life) == 7)
+        {
             players.push_back(p);
         }
         fclose(fptr);
     }
-    
+
     // Sort players by score (descending)
-    std::sort(players.begin(), players.end(), [](const player &a, const player &b) {
-        return a.score > b.score;
-    });
-    
+    std::sort(players.begin(), players.end(), [](const player &a, const player &b)
+              { return a.score > b.score; });
+
     return players;
 }
 
-void showLeaderboard() {
+void showLeaderboard()
+{
     iSetColor(10, 10, 10);
     iFilledRectangle(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
-    
+
     std::vector<player> players = getSortedPlayers();
-    
+
     iSetColor(130, 42, 4);
     iTextAdvanced(VIEW_WIDTH / 2 - 140, VIEW_HEIGHT - 100, "LEADERBOARD", 0.4, 3.0);
     iTextAdvanced(VIEW_WIDTH / 2 - 250, VIEW_HEIGHT - 150, "Rank", 0.3, 2.0);
     iTextAdvanced(VIEW_WIDTH / 2 - 50, VIEW_HEIGHT - 150, "Player", 0.3, 2.0);
     iTextAdvanced(VIEW_WIDTH / 2 + 150, VIEW_HEIGHT - 150, "Score", 0.3, 2.0);
     iTextAdvanced(VIEW_WIDTH / 2 - 300, VIEW_HEIGHT - 170, "----------------------", 0.3, 2.0);
-    
-    int maxVisibleEntries = 12; 
+
+    int maxVisibleEntries = 12;
     int totalEntries = static_cast<int>(players.size());
     int viewStart = max(0, min(leaderboardScroll, totalEntries - maxVisibleEntries));
-    if (totalEntries <= maxVisibleEntries) {
+    if (totalEntries <= maxVisibleEntries)
+    {
         viewStart = 0;
     }
-    int yStartPos = VIEW_HEIGHT - 200; 
-    int entryHeight = 40; 
-    
-    
-    for (int i = 0; i < maxVisibleEntries && (viewStart + i) < totalEntries; i++) {
+    int yStartPos = VIEW_HEIGHT - 200;
+    int entryHeight = 40;
+
+    for (int i = 0; i < maxVisibleEntries && (viewStart + i) < totalEntries; i++)
+    {
         int playerIndex = viewStart + i;
         int rank = playerIndex + 1;
         int yPos = yStartPos - (i * entryHeight);
-        if (yPos < 50) break;
+        if (yPos < 50)
+            break;
 
         char rankStr[10], scoreStr[20];
         sprintf(rankStr, "%d", rank);
         sprintf(scoreStr, "%d", players[playerIndex].score);
-        
-        if (rank == 1) {
-            iSetColor(255, 215, 0); 
-        } else if (rank == 2) {
+
+        if (rank == 1)
+        {
+            iSetColor(255, 215, 0);
+        }
+        else if (rank == 2)
+        {
             iSetColor(192, 192, 192);
-        } else if (rank == 3) {
-            iSetColor(205, 127, 50); 
-        } else {
+        }
+        else if (rank == 3)
+        {
+            iSetColor(205, 127, 50);
+        }
+        else
+        {
             iSetColor(56, 56, 59);
         }
-        
+
         iTextAdvanced(VIEW_WIDTH / 2 - 220, yPos, rankStr, 0.25, 1.8);
         iTextAdvanced(VIEW_WIDTH / 2 - 50, yPos, players[playerIndex].name, 0.25, 1.8);
         iTextAdvanced(VIEW_WIDTH / 2 + 170, yPos, scoreStr, 0.25, 1.8);
     }
-    
-    
+
     iSetColor(150, 150, 150);
-    
-    if (totalEntries > maxVisibleEntries) {
+
+    if (totalEntries > maxVisibleEntries)
+    {
         char positionStr[50];
-        sprintf(positionStr, "Showing %d-%d of %d players", 
-                viewStart + 1, 
-                min(viewStart + maxVisibleEntries, totalEntries), 
+        sprintf(positionStr, "Showing %d-%d of %d players",
+                viewStart + 1,
+                min(viewStart + maxVisibleEntries, totalEntries),
                 totalEntries);
         iTextAdvanced(VIEW_WIDTH / 2 - 60, 50, positionStr, 0.1, 1.2);
     }
-    
+
     iSetColor(255, 255, 255);
     iTextAdvanced(VIEW_WIDTH / 2 - 280, 20, "Use Arrow Keys to Scroll | Press 'P' to go back", 0.2, 1.5);
 }
-
-
 
 void applyGravity(player *p)
 {
@@ -750,26 +757,26 @@ void updatePlayerPosition(player *p)
 }
 
 void showInstructionsPage()
-{   
+{
     static int starFrame = 0;
     starFrame++;
     iSetColor(80, 80, 120);
-    for (int i = 0; i < 100; i++) {
-        int starX = (i * 137 + starFrame/2) % VIEW_WIDTH;
-        int starY = (i * 89 + 100 + starFrame/3) % VIEW_HEIGHT;
-        int brightness = 50 + (starFrame + i*13) % 100;
+    for (int i = 0; i < 100; i++)
+    {
+        int starX = (i * 137 + starFrame / 2) % VIEW_WIDTH;
+        int starY = (i * 89 + 100 + starFrame / 3) % VIEW_HEIGHT;
+        int brightness = 50 + (starFrame + i * 13) % 100;
         iSetColor(brightness, brightness, brightness + 50);
-        iFilledCircle(starX, starY, 1 + (i%3));
+        iFilledCircle(starX, starY, 1 + (i % 3));
     }
 
-    
-    iSetTransparentColor(56,5,128,0.55);
-    iFilledRectangle(0,0,1600,HEIGHT);
+    iSetTransparentColor(56, 5, 128, 0.55);
+    iFilledRectangle(0, 0, 1600, HEIGHT);
 
     iSetColor(255, 255, 255);
-    iTextAdvanced(370, HEIGHT-300, "HOW TO PLAY", 0.5, 3.5); 
+    iTextAdvanced(370, HEIGHT - 300, "HOW TO PLAY", 0.5, 3.5);
     iSetColor(200, 200, 200);
-    iTextAdvanced(100, HEIGHT-350, "CONTROLS:", 0.4, 3.0);
+    iTextAdvanced(100, HEIGHT - 350, "CONTROLS:", 0.4, 3.0);
     iTextAdvanced(130, 450, "Move Left   -   A or Left Arrow", 0.2, 2.0);
     iTextAdvanced(130, 420, "Move Right  -   D or Right Arrow", 0.2, 2.0);
     iTextAdvanced(130, 390, "Jump        -   W or Up Arrow", 0.2, 2.0);
@@ -780,7 +787,6 @@ void showInstructionsPage()
     iTextAdvanced(130, 220, "Press '1' or '2' in Settings to unlock secret background music.", 0.2, 2.0);
     iTextAdvanced(130, 190, "Press '0' in Settings for original background music.", 0.2, 2.0);
     iTextAdvanced(130, 160, "Avoid falling and reach the end safely.", 0.2, 2.0);
-
 }
 void showCredits()
 {
@@ -878,19 +884,19 @@ void showIconBox()
     if (!soundON)
         iLine(1520 - 400 + 4, 824 - 225, 1566 - 400 + 4, 870 - 225); // Mark
     iRectangle(1512 - 400, 30, 62, 62);                              // Settings Icon Box
-    iRectangle(1512 - 400, 100, 62, 62); // Leaderboard
+    iRectangle(1512 - 400, 100, 62, 62);                             // Leaderboard
 }
 
 void showIcons()
 {
-    iShowLoadedImage(1516 - 400 + 5, 822 - 225, &sound_icon); // Sound
-    iShowLoadedImage(1512 - 400 + 6, 30 + 6, &settings_icon); // Settings
+    iShowLoadedImage(1516 - 400 + 5, 822 - 225, &sound_icon);    // Sound
+    iShowLoadedImage(1512 - 400 + 6, 30 + 6, &settings_icon);    // Settings
     iShowLoadedImage(1512 - 400 + 5, 100 + 6, &high_score_icon); // Leaderboard
 }
 
 void displayWord(int wordIndex)
 {
-    if(wordIndex >= 0 && wordIndex < 5)
+    if (wordIndex >= 0 && wordIndex < 5)
     {
         word_counter = wordIndex;
         wordShow = true;
@@ -898,38 +904,35 @@ void displayWord(int wordIndex)
     }
 }
 
-
 void showWord()
 {
-    if(wordShow && word_counter >= 0 && word_counter < 5)
+    if (wordShow && word_counter >= 0 && word_counter < 5)
     {
-        if(word_counter == 2 || word_counter == 4)
+        if (word_counter == 2 || word_counter == 4)
         {
             iSetColor(0, 255, 0);
-            iTextBold(VIEW_WIDTH/2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
+            iTextBold(VIEW_WIDTH / 2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
         }
-        else if(word_counter == 1)
+        else if (word_counter == 1)
         {
             iSetColor(252, 73, 3);
-            iTextBold(VIEW_WIDTH/2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
+            iTextBold(VIEW_WIDTH / 2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
         }
-        else if(word_counter == 0 || word_counter == 3)
+        else if (word_counter == 0 || word_counter == 3)
         {
             iSetColor(252, 232, 3);
-            iTextBold(VIEW_WIDTH/2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
+            iTextBold(VIEW_WIDTH / 2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
         }
-        
-        
+
         // Decrease timer
         wordDisplayTimer--;
-        if(wordDisplayTimer <= 0)
+        if (wordDisplayTimer <= 0)
         {
             wordShow = false;
             word_counter = -1;
         }
     }
 }
-
 
 char lifeStr[5], coinStr[5], scoreStr[5];
 void showStatus()
@@ -968,7 +971,7 @@ void showStatus()
 
 void cleanup_map_data(const char *playerName, int level)
 {
-    for(int i=0;i<level;i++)
+    for (int i = 0; i < level; i++)
     {
         char filename[100];
         snprintf(filename, sizeof(filename), "./game_data/map_%s_level_%d.dat", playerName, i);
@@ -983,21 +986,23 @@ void cleanup_map_data(const char *playerName, int level)
             }
             else
             {
-                //printf("Failed to delete: %s\n", filename);
+                // printf("Failed to delete: %s\n", filename);
             }
         }
     }
-    
-
 }
 
-void saveMapData(const char* playerName, int level)
+void saveMapData(const char *playerName, int level)
 {
     char file[128];
     snprintf(file, sizeof(file), "./game_data/map_%s_level_%d.dat", playerName, level);
 
     FILE *f = fopen(file, "wb");
-    if (!f) { perror("saveMapData"); return; }
+    if (!f)
+    {
+        perror("saveMapData");
+        return;
+    }
 
     int rows = HEIGHT / Tile_Size;
     int cols = WIDTH / Tile_Size;
@@ -1011,7 +1016,8 @@ void savePlayerData(const player &p)
 {
     std::vector<player> players;
     FILE *fptr = fopen("./game_data/player_info.txt", "r");
-    if (!fptr) {
+    if (!fptr)
+    {
         system("mkdir -p game_data");
     }
     bool playerFound = false;
@@ -1074,20 +1080,22 @@ void savePlayerData(const player &p)
     saveMapData(p.name, p.level);
 }
 
-
-
-bool loadMapData(const char* playerName, int level)
+bool loadMapData(const char *playerName, int level)
 {
     char file[128];
     snprintf(file, sizeof(file), "./game_data/map_%s_level_%d.dat", playerName, level);
 
     FILE *f = fopen(file, "rb");
-    if (!f) { changeMap(level); return false; }
+    if (!f)
+    {
+        changeMap(level);
+        return false;
+    }
 
     int rows, cols;
     if (fread(&rows, sizeof(int), 1, f) != 1 ||
         fread(&cols, sizeof(int), 1, f) != 1 ||
-        rows != HEIGHT/Tile_Size || cols != WIDTH/Tile_Size ||
+        rows != HEIGHT / Tile_Size || cols != WIDTH / Tile_Size ||
         fread(map, sizeof(int), rows * cols, f) != (size_t)(rows * cols))
     {
         fclose(f);
@@ -1101,10 +1109,11 @@ bool loadMapData(const char* playerName, int level)
 bool loadPlayerData(const char *playerName, player *p)
 {
     FILE *fptr = fopen("./game_data/player_info.txt", "r");
-    if (!fptr){
-    
+    if (!fptr)
+    {
+
         system("mkdir -p game_data");
-    
+
         return false; // File doesn't exist
     }
 
@@ -1136,7 +1145,7 @@ bool loadPlayerData(const char *playerName, player *p)
     }
 
     fclose(fptr);
-    if(playerFound)
+    if (playerFound)
     {
         loadMapData(playerName, (*p).level);
     }
@@ -1162,9 +1171,8 @@ void cleanup()
     }
     for (int i = 0; i < 8; ++i)
         iFreeImage(&portalG[i]);
-    
+
     cleanup_map_data(p1.name, p1.level);
-    
 }
 
 void updateLevelMusic()
@@ -1237,11 +1245,12 @@ void checkObject(player *p)
     int x_tile_r = ((*p).coor_x + (*p).pixel - 8) / Tile_Size;
     int y_tile = (HEIGHT / Tile_Size) - (((*p).coor_y + 16) / Tile_Size) - 1;
 
-    if (x_tile < 0 || x_tile >= WIDTH/Tile_Size || 
-    x_tile_r < 0 || x_tile_r >= WIDTH/Tile_Size ||
-    y_tile < 0 || y_tile >= HEIGHT/Tile_Size) {
-    return;
-}
+    if (x_tile < 0 || x_tile >= WIDTH / Tile_Size ||
+        x_tile_r < 0 || x_tile_r >= WIDTH / Tile_Size ||
+        y_tile < 0 || y_tile >= HEIGHT / Tile_Size)
+    {
+        return;
+    }
 
     // Coin
     if (map[y_tile][x_tile] == Coin)
@@ -1251,7 +1260,7 @@ void checkObject(player *p)
         map[y_tile][x_tile] = 0;
         iPlaySound("assets/Sounds/coin_collected.wav", false, 40);
         (*p).coins = coin_counter;
-        displayWord(0);  // Show "COIN COLLECTED!"
+        displayWord(0); // Show "COIN COLLECTED!"
     }
     else if (map[y_tile][x_tile_r] == Coin)
     {
@@ -1260,7 +1269,7 @@ void checkObject(player *p)
         map[y_tile][x_tile_r] = 0;
         iPlaySound("assets/Sounds/coin_collected.wav", false, 40);
         (*p).coins = coin_counter;
-        displayWord(0);  // Show "COIN COLLECTED!"
+        displayWord(0); // Show "COIN COLLECTED!"
     }
 
     // Shuriken
@@ -1273,14 +1282,14 @@ void checkObject(player *p)
         else
             p1.score = 0;
         (*p).player_life = life;
-        displayWord(1);  // Show "LIFE LOST! BE CAREFUL..."
+        displayWord(1); // Show "LIFE LOST! BE CAREFUL..."
     }
     else if (map[y_tile][x_tile_r] == Shuriken)
     {
         map[y_tile][x_tile_r] = 0;
         life--;
         (*p).player_life = life;
-        displayWord(1);  // Show "LIFE LOST! BE CAREFUL..."
+        displayWord(1); // Show "LIFE LOST! BE CAREFUL..."
     }
 
     else if (map[y_tile][x_tile] == Health)
@@ -1290,8 +1299,9 @@ void checkObject(player *p)
         {
             life++;
             (*p).player_life = life;
-            displayWord(2);  // Show "HEALTH REGAINED!!"
-        }else if(life>=3)
+            displayWord(2); // Show "HEALTH REGAINED!!"
+        }
+        else if (life >= 3)
         {
             displayWord(5);
         }
@@ -1303,13 +1313,13 @@ void checkObject(player *p)
         {
             life++;
             (*p).player_life = life;
-            displayWord(2);  // Show "HEALTH REGAINED!!"
+            displayWord(2); // Show "HEALTH REGAINED!!"
         }
     }
 
     if (life <= 0)
     {
-        gameState = Blank;
+        gameState = Died;
     }
 
     // Portal
@@ -1319,14 +1329,16 @@ void checkObject(player *p)
         switch (gameLevel)
         {
         case 1:
-            setLevel(2, (WIDTH/Tile_Size)-2, 2); // Level 2
-
+            setLevel(2, (WIDTH / Tile_Size) - 2, 2); // Level 2
             break;
         case 2:
-            setLevel(3, (WIDTH/Tile_Size)+2, (HEIGHT/Tile_Size)-3); // Level 3
+            setLevel(3, 48, (HEIGHT / Tile_Size) - 3); // Level 3
+            break;
+        case 3:
+            gameState = Win;
             break;
         default:
-            iShowLoadedImage(0,0,&death_screen);
+            iShowLoadedImage(0, 0, &death_screen);
             break;
         }
     }
@@ -1337,13 +1349,11 @@ void input_name()
     iSetColor(10, 10, 10);
     iFilledRectangle(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
 
-    
     int maxVisibleChars = 19;
     int nameLength = static_cast<int>(strlen(playerNameInput));
     int viewStart = max(0, nameLength - maxVisibleChars);
 
     char *visiblePart = playerNameInput + viewStart;
-
 
     iSetColor(255, 255, 255);
     iTextAdvanced(VIEW_WIDTH / 2 - 230, VIEW_HEIGHT / 2 + 50, "Enter Your Name:", 0.4, 2.0);
@@ -1354,7 +1364,8 @@ void input_name()
 
 void iDraw()
 {
-    if (gameState == Play) {
+    if (gameState == Play)
+    {
         moveCam();
     }
 
@@ -1387,20 +1398,23 @@ void iDraw()
     case NameInput:
         input_name();
         break;
-    case Blank:
+    case Died:
         iClear();
-        
+
         iSetColor(255, 100, 100);
         iShowLoadedImage(0, 0, &death_screen);
         iTextAdvanced(200, 100, "Press 'p' to show leaderboard!", 0.4, 5.0);
         iDelay(1);
+        break;
+    case Win:
+        iClear();
+        iShowLoadedImage(0, 0, &win_screen);
         break;
     case Leaderboard:
         showLeaderboard();
         break;
     }
 }
-
 
 void iKeyboard(unsigned char key)
 {
@@ -1409,24 +1423,23 @@ void iKeyboard(unsigned char key)
     case 'p':
 
         if (gameState == Play || gameState == Settings || gameState == Credits || gameState == Instructions || gameState == Leaderboard)
-        {   
+        {
             savePlayerData(p1);
             saveMapData(p1.name, p1.level);
             gameState = Menu;
             updateLevelMusic();
         }
-        else if( gameState == Blank)
+        else if (gameState == Died || gameState == Win)
         {
             savePlayerData(p1);
             saveMapData(p1.name, p1.level);
             life = 3;
             gameState = Leaderboard;
             updateLevelMusic();
-
         }
         break;
     case 'm':
-        if (gameState != NameInput)    
+        if (gameState != NameInput)
         {
             if (soundON)
             {
@@ -1487,15 +1500,15 @@ void iKeyboard(unsigned char key)
         {
             if (isNewGame)
             {
-                //cleanup();
-                initPlayer(&p1, 2,2);
+                // cleanup();
+                initPlayer(&p1, 2, 2);
                 word_counter = -1;
                 p1.score = 0;
                 p1.coins = 0;
                 p1.level = 1;
                 p1.player_life = 3;
                 strcpy(p1.name, playerNameInput);
-                coin_counter=0;
+                coin_counter = 0;
                 life = 3;
 
                 changeMap(p1.level);
@@ -1512,7 +1525,8 @@ void iKeyboard(unsigned char key)
 
                     life = p1.player_life;
                     coin_counter = p1.coins;
-                    if (!loadMapData(p1.name, p1.level)) {
+                    if (!loadMapData(p1.name, p1.level))
+                    {
                         // No saved map, fallback to default
                         printf("No map data found, loading default map...\n");
                     }
@@ -1522,8 +1536,8 @@ void iKeyboard(unsigned char key)
                 }
                 else
                 {
-                    //cleanup();
-                    initPlayer(&p1, 2,2);
+                    // cleanup();
+                    initPlayer(&p1, 2, 2);
                     word_counter = -1;
                     strcpy(p1.name, playerNameInput);
                     p1.score = 0;
@@ -1555,20 +1569,24 @@ void iKeyboard(unsigned char key)
         return;
     }
 }
-void iSpecialKeyboard(unsigned char key) {
-    switch(key) {
-        case GLUT_KEY_UP:
-            if (gameState == Leaderboard) {
-                leaderboardScroll = max(0, leaderboardScroll - 1);
-            }
-            break;
-        case GLUT_KEY_DOWN:
-            if (gameState == Leaderboard) {
-                std::vector<player> players = getSortedPlayers();
-                int maxScroll = max(0, static_cast<int>(players.size()) - 12);
-                leaderboardScroll = min(maxScroll, leaderboardScroll + 1);
-            }
-            break;
+void iSpecialKeyboard(unsigned char key)
+{
+    switch (key)
+    {
+    case GLUT_KEY_UP:
+        if (gameState == Leaderboard)
+        {
+            leaderboardScroll = max(0, leaderboardScroll - 1);
+        }
+        break;
+    case GLUT_KEY_DOWN:
+        if (gameState == Leaderboard)
+        {
+            std::vector<player> players = getSortedPlayers();
+            int maxScroll = max(0, static_cast<int>(players.size()) - 12);
+            leaderboardScroll = min(maxScroll, leaderboardScroll + 1);
+        }
+        break;
     }
 }
 void iSpecialKeyboardUp(unsigned char key) {}
@@ -1712,15 +1730,14 @@ void iMouse(int button, int state, int mx, int my)
     }
 }
 
-
 void iMouseWheel(int dir, int x, int y)
 {
-    if (gameState == Instructions || gameState == Leaderboard) {
+    if (gameState == Instructions || gameState == Leaderboard)
+    {
         instructionScrollY += (dir > 0 ? 30 : -30); // scroll up/down
         instructionScrollY = max(0, min(instructionScrollY, maxScrollY));
     }
 }
-
 
 void motion() // 50ms
 {

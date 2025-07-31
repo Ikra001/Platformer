@@ -1473,7 +1473,6 @@ void iMouseMove(int mx, int my)
 }
 void iMouse(int button, int state, int mx, int my)
 {
-    // printf("mx = %d, my = %d\n", mx, my);
     if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN)
     {
         if (gameState == Menu)
