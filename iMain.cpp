@@ -5,6 +5,18 @@
 #include <iostream>
 #include <chrono>
 
+// If game crashes, remove some player datas in game_data/player_info.txt
+
+#define max(a, b) (((a) > (b)) ? (a) : (b))
+
+#ifdef _WIN32
+#include <io.h>
+#define UNLINK _unlink
+#else
+#include <unistd.h>
+#define UNLINK unlink
+#endif
+
 #define WIDTH 1600
 #define HEIGHT 900
 #define VIEW_WIDTH 1200
@@ -19,16 +31,13 @@
 #define JUMP_VELOCITY 14
 #define TERMINAL_VELOCITY -12
 
-#define max(a, b) (((a) > (b)) ? (a) : (b))
-
-std::chrono::high_resolution_clock::time_point lastFrameTime = std::chrono::high_resolution_clock::now();
-const int FRAME_DURATION = 1000 / 120;
-
 enum Objects
 {
     Coin = 9,
     Shuriken = 8,
-    PortalG = 7
+    PortalG = 7,
+    Health = 10
+
 };
 
 enum State
@@ -41,8 +50,9 @@ enum State
     Settings = 4,
     Continue = 5,
     NameInput = 6,
-    Blank = 7,
-    Leaderboard = 8
+    Died = 7,
+    Leaderboard = 8,
+    Win = 9
 };
 
 enum Direction
@@ -78,9 +88,18 @@ typedef struct
 
 } player;
 
+struct Particle
+{
+    float x, y, vx, vy;
+    int life;
+    int color[3];
+};
+
+std::vector<Particle> particles;
+
 // Declarations
 player p1;
-Image tile, menu, settings_page, death_screen, sound_icon, settings_icon, high_score_icon, ins_page, creds_page;
+Image tile, menu, settings_page, death_screen, sound_icon, settings_icon, high_score_icon, ins_page, creds_page, win_screen;
 int idle_index = 0;
 int life = 3;
 char playerNameInput[50] = {0};
@@ -92,19 +111,28 @@ int gameState = Menu;
 bool isNewGame = true;
 
 bool soundON = true;
-int bgSound, bgSound2, bgSound3, bgVol = 50, lastPlayedSound, l1sound, l2sound, l3sound;
+int bgSound, bgSound2, bgSound3, bgVol = 70, lastPlayedSound, l1sound, l2sound, l3sound;
 int currentMenuMusic = 0;
 char bgVolStr[5];
 
-Image coin[7], shuriken[7], portalG[8];
-int coin_index = 0, shuriken_index = 0, portal_index = 0;
-char coin_images[7][50], shuriken_images[7][50], portalG_images[8][50];
+Image coin[7], shuriken[7], portalG[8], regainLife[7];
+int coin_index = 0, shuriken_index = 0, portal_index = 0, regainLife_index = 0;
+char coin_images[7][50], shuriken_images[7][50], portalG_images[8][50], regainLife_images[7][50];
 int coin_counter = 0;
-
+int regainLife_counter = 0;
+int coinSound;
+int word_counter = -1;
+char word[5][50] = {"COIN COLLECTED!", "LIFE LOST! BE CAREFUL...", "HEALTH REGAINED!!", "CHANGED MAP", "LIFE ALREADY FULL!!"};
+bool wordShow = false;
+int wordDisplayTimer = 0;
+const int WORD_DISPLAY_DURATION = 60;
 int camX = 0, camY = 0;
 
 bool showBoxLeaderboard = false;
-int ScrollY = 0;
+
+int instructionScrollY = 0;
+int leaderboardScroll = 0;
+
 int maxScrollY = 200;
 
 void moveCam()
@@ -129,22 +157,23 @@ void moveCam()
 void loadResources()
 {
     iLoadImage(&tile, "assets/Images/TileLarge/Tile_12_L.png");
-    iLoadImage(&menu, "assets/Page/Menu/dark.jpeg");
+    iLoadImage(&menu, "assets/Page/dark.jpeg");
     iLoadImage(&settings_page, "assets/Page/settings_page.jpeg");
-    iLoadImage(&death_screen, "assets/Images/Death/youdied2.jpg");
+    iLoadImage(&death_screen, "assets/Images/Death/youdied.jpg");
     iLoadImage(&sound_icon, "assets/Images/Icons/sound_icon2.png");
     iLoadImage(&settings_icon, "assets/Images/Icons/settings_icon2.png");
     iLoadImage(&high_score_icon, "assets/Images/Icons/leaderboard_icon.png");
     iScaleImage(&high_score_icon, 3.0);
     iLoadImage(&ins_page, "assets/Page/instructions_page.jpg");
     iLoadImage(&creds_page, "assets/Page/credits_page.jpg");
+    iLoadImage(&win_screen, "assets/Page/win_screen.jpeg");
 }
 
 void load_objects()
 {
     for (int i = 0; i < 7; i++)
     {
-        sprintf(coin_images[i], "assets/Images/Sprites/Coin/coin%03d.png", i);
+        sprintf(coin_images[i], "assets/Images/Sprites/coin/coin%03d.png", i);
         iLoadImage(&coin[i], coin_images[i]);
     }
     for (int i = 0; i < 7; i++)
@@ -156,6 +185,12 @@ void load_objects()
     {
         sprintf(portalG_images[i], "assets/Images/Sprites/Portal/portalG%03d.png", i);
         iLoadImage(&portalG[i], portalG_images[i]);
+    }
+
+    for (int i = 0; i < 7; i++)
+    {
+        sprintf(regainLife_images[i], "assets/Images/Sprites/regain_life/regainLife%02d.png", i);
+        iLoadImage(&regainLife[i], regainLife_images[i]);
     }
 }
 
@@ -188,13 +223,13 @@ const int map1[HEIGHT / Tile_Size][WIDTH / Tile_Size] = {
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1},
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1},
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 9, 9, 9, 0, 0, 0, 0, 0, 0, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 8, 8, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 9, 9, 9, 0, 0, 0, 0, 0, 0, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 8, 8, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
     {1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 9, 1},
     {1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
     {1, 0, 9, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 8, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1},
     {1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
     {1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
@@ -204,73 +239,79 @@ const int map1[HEIGHT / Tile_Size][WIDTH / Tile_Size] = {
     {1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1},
     {1, 0, 0, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 9, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 1, 0, 1, 0, 1},
     {1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1},
     {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}};
 
 const int map2[HEIGHT / Tile_Size][WIDTH / Tile_Size] = {
     {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-    {1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1},
-    {1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1},
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1},
+    {1, 9, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1},
+    {1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1},
     {1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 9, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1},
     {1, 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1},
     {1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1},
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 8, 0, 0, 1},
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1},
-    {1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1},
-    {1, 7, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1},
+    {1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1},
+    {1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1},
     {1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 9, 0, 0, 0, 9, 1, 9, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1},
+    {1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 9, 0, 0, 0, 9, 0, 9, 0, 1, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 1, 1, 1},
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1},
-    {1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1},
-    {1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 8, 8, 0, 0, 0, 0, 9, 9, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 9, 0, 9, 1, 1},
-    {1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 9, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+    {1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1},
+    {1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 8, 8, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 1, 1, 1, 9, 10, 9, 1, 1},
+    {1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 8, 1, 0, 9, 1, 1, 10, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1},
-    {1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 9, 9, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1},
-    {1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 8, 8, 8, 0, 0, 9, 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 9, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 1, 8, 0, 1, 1, 9, 9, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 8, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1},
+    {1, 1, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 1, 1, 1, 0, 0, 1, 8, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 9, 0, 8, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 9, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 1, 1, 9, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 7, 0, 0, 8, 0, 0, 0, 9, 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 9, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1},
     {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}};
 
 const int map3[HEIGHT / Tile_Size][WIDTH / Tile_Size] = {
     {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-    {1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1},
-    {1, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1},
+    {1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1},
+    {1, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 1},
     {1, 1, 1, 0, 1, 8, 1, 0, 0, 0, 0, 0, 9, 0, 9, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 9, 0, 0, 0, 0, 9, 0, 0, 9, 0, 0, 0, 0, 0, 1, 8, 1, 0, 1, 1, 1},
-    {1, 0, 0, 9, 0, 0, 0, 0, 0, 0, 1, 1, 1, 8, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 9, 1, 1, 0, 0, 1, 1, 8, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 1},
-    {1, 0, 0, 1, 8, 0, 1, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 8, 1, 0, 0, 8, 1, 0, 0, 1},
-    {1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1},
-    {1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 8, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1},
-    {1, 0, 0, 9, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 1, 8, 1, 1, 1, 8, 1, 0, 9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 8, 0, 0, 1},
+    {1, 0, 0, 9, 0, 0, 0, 0, 0, 0, 1, 1, 1, 8, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 9, 1, 0, 0, 0, 1, 1, 8, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 1, 1, 0, 1, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 8, 1, 0, 0, 9, 9, 0, 0, 1},
+    {1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1},
+    {1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 8, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 9, 0, 1, 0, 1},
+    {1, 0, 0, 9, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 9, 0, 1, 9, 1, 1, 1, 8, 1, 0, 9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1},
     {1, 0, 1, 1, 1, 0, 0, 1, 1, 9, 9, 9, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 9, 9, 9, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1},
     {1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 8, 8, 1, 1, 1, 0, 1, 1, 8, 1, 1, 0, 0, 1, 0, 0, 1, 1, 8, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 8, 0, 1, 1, 1, 1, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 9, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 8, 1, 1, 1, 1, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 9, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 8, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 8, 1, 0, 1, 1, 0, 1},
+    {1, 0, 0, 0, 0, 10, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 9, 1, 1, 1, 0, 1, 1, 8, 1, 1, 0, 0, 1, 0, 0, 1, 1, 8, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 1, 1, 1, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 9, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1},
+    {1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 8, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 8, 1, 0, 1, 1, 0, 1},
     {1, 0, 0, 0, 1, 1, 8, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1},
-    {1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 8, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 8, 8, 1, 1, 1, 0, 0, 0, 0, 1, 0, 9, 0, 9, 0, 8, 0, 0, 1},
-    {1, 9, 0, 8, 7, 0, 0, 9, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 1},
-    {1, 1, 1, 1, 1, 1, 8, 1, 9, 1, 0, 8, 0, 0, 0, 0, 0, 0, 9, 9, 0, 0, 0, 0, 1, 0, 0, 0, 0, 9, 9, 0, 0, 0, 0, 0, 0, 8, 0, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 9, 0, 9, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 9, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 1},
-    {1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1},
+    {1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 8, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 8, 8, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 8, 0, 0, 1},
+    {1, 9, 0, 8, 0, 0, 0, 9, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 1, 1, 1, 1, 0, 1},
+    {1, 1, 1, 1, 1, 1, 8, 1, 9, 1, 0, 8, 0, 0, 0, 0, 0, 0, 9, 9, 0, 0, 0, 0, 1, 0, 0, 0, 0, 9, 9, 0, 0, 0, 0, 0, 0, 8, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 9, 0, 9, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 9, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 8, 0, 0, 1},
+    {1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
     {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}};
 
 void changeMap(int level)
 {
     int row = HEIGHT / Tile_Size;
     int col = WIDTH / Tile_Size;
+
+    if (level < 1 || level > 3)
+    {
+        printf("Invalid level: %d\n", level);
+        level = 1; // Default to level 1
+    }
 
     switch (level)
     {
@@ -295,6 +336,17 @@ void changeMap(int level)
 
 void showPlatform()
 {
+    static int starFrame = 0;
+    starFrame++;
+    iSetColor(80, 80, 120);
+    for (int i = 0; i < 100; i++)
+    {
+        int starX = (i * 137 + starFrame / 2) % VIEW_WIDTH;
+        int starY = (i * 89 + 100 + starFrame / 3) % VIEW_HEIGHT;
+        int brightness = 50 + (starFrame + i * 13) % 100;
+        iSetColor(brightness, brightness, brightness + 50);
+        iFilledCircle(starX, starY, 1 + (i % 3));
+    }
     for (int i = 0; i < HEIGHT / Tile_Size; i++) // Tiles (Platform)
         for (int j = 0; j < WIDTH / Tile_Size; j++)
             if (map[i][j] == 1)
@@ -317,6 +369,10 @@ void showPlatform()
                 break;
             case PortalG:
                 iShowLoadedImage(x_tile, y_tile, &portalG[portal_index]);
+                break;
+            case Health:
+                iShowLoadedImage(x_tile, y_tile, &regainLife[regainLife_index]);
+                break;
             }
         }
     }
@@ -402,6 +458,29 @@ void motionIndex(player *p)
     }
 }
 
+bool isSolid(int x_map, int y_flipped_map)
+{
+    if (x_map < 0 || x_map >= WIDTH / Tile_Size || y_flipped_map < 0 || y_flipped_map >= HEIGHT / Tile_Size)
+    {
+        return true;
+    }
+    return map[y_flipped_map][x_map] == 1;
+}
+
+bool checkOnGround(player *p)
+{
+    int below_y_pixel = (*p).coor_y - 1;
+    int y_map_flipped_foot = (HEIGHT / Tile_Size) - 1 - (below_y_pixel / Tile_Size);
+    int x_map_leftfoot = ((*p).coor_x + 3) / Tile_Size;
+    int x_map_rightfoot = ((*p).coor_x + (*p).pixel - 4) / Tile_Size;
+
+    if (isSolid(x_map_leftfoot, y_map_flipped_foot) || isSolid(x_map_rightfoot, y_map_flipped_foot))
+    {
+        return true;
+    }
+    return false;
+}
+
 std::vector<player> getSortedPlayers()
 {
     std::vector<player> players;
@@ -433,75 +512,76 @@ std::vector<player> getSortedPlayers()
 
 void showLeaderboard()
 {
+    iSetColor(10, 10, 10);
+    iFilledRectangle(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+
     std::vector<player> players = getSortedPlayers();
 
-    iSetColor(255, 255, 255);
-    iTextAdvanced(400, 820 - ScrollY, "LEADERBOARD", 0.4, 3.0);
-    iTextAdvanced(200, 780 - ScrollY, "Rank", 0.3, 2.0);
-    iTextAdvanced(500, 780 - ScrollY, "Player", 0.3, 2.0);
-    iTextAdvanced(800, 780 - ScrollY, "Score", 0.3, 2.0);
-    iTextAdvanced(150, 760 - ScrollY, "-------------------------------", 0.3, 2.0);
+    iSetColor(130, 42, 4);
+    iTextAdvanced(VIEW_WIDTH / 2 - 140, VIEW_HEIGHT - 100, "LEADERBOARD", 0.4, 3.0);
+    iTextAdvanced(VIEW_WIDTH / 2 - 250, VIEW_HEIGHT - 150, "Rank", 0.3, 2.0);
+    iTextAdvanced(VIEW_WIDTH / 2 - 50, VIEW_HEIGHT - 150, "Player", 0.3, 2.0);
+    iTextAdvanced(VIEW_WIDTH / 2 + 150, VIEW_HEIGHT - 150, "Score", 0.3, 2.0);
+    iTextAdvanced(VIEW_WIDTH / 2 - 300, VIEW_HEIGHT - 170, "----------------------", 0.3, 2.0);
 
-    int visibleTop = 900;
-    int visibleBottom = 60;
-
-    int yPos = 750;
-    int rank = 1;
-
-    for (size_t i = 0; i < players.size(); i++)
+    int maxVisibleEntries = 12;
+    int totalEntries = static_cast<int>(players.size());
+    int viewStart = max(0, min(leaderboardScroll, totalEntries - maxVisibleEntries));
+    if (totalEntries <= maxVisibleEntries)
     {
-        int currentY = yPos - ScrollY;
+        viewStart = 0;
+    }
+    int yStartPos = VIEW_HEIGHT - 200;
+    int entryHeight = 40;
 
-        if (currentY < visibleBottom)
+    for (int i = 0; i < maxVisibleEntries && (viewStart + i) < totalEntries; i++)
+    {
+        int playerIndex = viewStart + i;
+        int rank = playerIndex + 1;
+        int yPos = yStartPos - (i * entryHeight);
+        if (yPos < 50)
             break;
-        if (currentY > visibleTop)
-        {
-            yPos -= 50;
-            rank++;
-            continue;
-        }
 
         char rankStr[10], scoreStr[20];
         sprintf(rankStr, "%d", rank);
-        sprintf(scoreStr, "%d", players[i].score);
+        sprintf(scoreStr, "%d", players[playerIndex].score);
 
-        iSetColor(255, 215, 0); // Gold for top 3
-        if (rank > 3)
-            iSetColor(200, 200, 200); // Gray for others
+        if (rank == 1)
+        {
+            iSetColor(255, 215, 0);
+        }
+        else if (rank == 2)
+        {
+            iSetColor(192, 192, 192);
+        }
+        else if (rank == 3)
+        {
+            iSetColor(205, 127, 50);
+        }
+        else
+        {
+            iSetColor(56, 56, 59);
+        }
 
-        iTextAdvanced(230, currentY, rankStr, 0.2, 1.5);
-        iTextAdvanced(500, currentY, players[i].name, 0.2, 1.5);
-        iTextAdvanced(820, currentY, scoreStr, 0.2, 1.5);
-
-        yPos -= 50;
-        rank++;
+        iTextAdvanced(VIEW_WIDTH / 2 - 220, yPos, rankStr, 0.25, 1.8);
+        iTextAdvanced(VIEW_WIDTH / 2 - 50, yPos, players[playerIndex].name, 0.25, 1.8);
+        iTextAdvanced(VIEW_WIDTH / 2 + 170, yPos, scoreStr, 0.25, 1.8);
     }
 
     iSetColor(150, 150, 150);
-    iTextAdvanced(300, 40 - ScrollY, "Press RMB or 'p' to go back", 0.3, 2.5);
-}
 
-bool isSolid(int x_map, int y_flipped_map)
-{
-    if (x_map < 0 || x_map >= WIDTH / Tile_Size || y_flipped_map < 0 || y_flipped_map >= HEIGHT / Tile_Size)
+    if (totalEntries > maxVisibleEntries)
     {
-        return true;
+        char positionStr[50];
+        sprintf(positionStr, "Showing %d-%d of %d players",
+                viewStart + 1,
+                min(viewStart + maxVisibleEntries, totalEntries),
+                totalEntries);
+        iTextAdvanced(VIEW_WIDTH / 2 - 60, 50, positionStr, 0.1, 1.2);
     }
-    return map[y_flipped_map][x_map] == 1;
-}
 
-bool checkOnGround(player *p)
-{
-    int below_y_pixel = (*p).coor_y - 1;
-    int y_map_flipped_foot = (HEIGHT / Tile_Size) - 1 - (below_y_pixel / Tile_Size);
-    int x_map_leftfoot = ((*p).coor_x + 3) / Tile_Size;
-    int x_map_rightfoot = ((*p).coor_x + (*p).pixel - 4) / Tile_Size;
-
-    if (isSolid(x_map_leftfoot, y_map_flipped_foot) || isSolid(x_map_rightfoot, y_map_flipped_foot))
-    {
-        return true;
-    }
-    return false;
+    iSetColor(255, 255, 255);
+    iTextAdvanced(VIEW_WIDTH / 2 - 280, 20, "Use Arrow Keys to Scroll | Press 'P' to go back", 0.2, 1.5);
 }
 
 void applyGravity(player *p)
@@ -680,35 +760,39 @@ void updatePlayerPosition(player *p)
 
 void showInstructionsPage()
 {
-    iShowLoadedImage(0, 0, &ins_page);
-    // iSetColor(255, 255, 255);
-    // iTextAdvanced(370, 570, "HOW TO PLAY", 0.5, 3.5);
+    static int starFrame = 0;
+    starFrame++;
+    iSetColor(80, 80, 120);
+    for (int i = 0; i < 100; i++)
+    {
+        int starX = (i * 137 + starFrame / 2) % VIEW_WIDTH;
+        int starY = (i * 89 + 100 + starFrame / 3) % VIEW_HEIGHT;
+        int brightness = 50 + (starFrame + i * 13) % 100;
+        iSetColor(brightness, brightness, brightness + 50);
+        iFilledCircle(starX, starY, 1 + (i % 3));
+    }
 
-    // iSetColor(200, 200, 200);
-    // iText(100, 480, "CONTROLS:");
-    // iText(120, 450, "Move Left   -  A or Left Arrow");
-    // iText(120, 420, "Move Right  -  D or Right Arrow");
-    // iText(120, 390, "Jump        -  W or Up Arrow");
-    // iText(120, 360, "Change Skin -  Q");
-    // iText(120, 330, "Press RMB to go back.");
+    iSetTransparentColor(56, 5, 128, 0.55);
+    iFilledRectangle(0, 0, 1600, HEIGHT);
 
-    // iText(100, 280, "TIPS:");
-    // iText(120, 250, "Press '1' or '2' in Settings to unlock secret background music.");
-    // iText(120, 220, "Press '0' in Settings for original background music.");
-    // iText(120, 190, "Avoid falling and reach the end safely.");
+    iSetColor(255, 255, 255);
+    iTextAdvanced(370, HEIGHT - 300, "HOW TO PLAY", 0.5, 3.5);
+    iSetColor(200, 200, 200);
+    iTextAdvanced(100, HEIGHT - 350, "CONTROLS:", 0.4, 3.0);
+    iTextAdvanced(130, 450, "Move Left   -   A or Left Arrow", 0.2, 2.0);
+    iTextAdvanced(130, 420, "Move Right  -   D or Right Arrow", 0.2, 2.0);
+    iTextAdvanced(130, 390, "Jump        -   W or Up Arrow", 0.2, 2.0);
+    iTextAdvanced(130, 360, "Change Skin -   Q", 0.2, 2.0);
+    iTextAdvanced(130, 330, "Press RMB to go back.", 0.2, 2.0);
+
+    iTextAdvanced(100, 280, "TIPS:", 0.3, 3.0);
+    iTextAdvanced(130, 220, "Press '1' or '2' in Settings to unlock secret background music.", 0.2, 2.0);
+    iTextAdvanced(130, 190, "Press '0' in Settings for original background music.", 0.2, 2.0);
+    iTextAdvanced(130, 160, "Avoid falling and reach the end safely.", 0.2, 2.0);
 }
-
 void showCredits()
 {
     iShowLoadedImage(0, 0, &creds_page);
-    // iTextAdvanced(480, 550, "Credits", 0.5, 3.0);
-    // iTextAdvanced(345, 530, "__________", 0.5, 3.0);
-
-    // iTextAdvanced(100, 250, "Snehashis Balo", 0.4, 2.5);
-    // iTextAdvanced(100, 200, "ID: 2405069", 0.3, 1.5);
-
-    // iTextAdvanced(740, 250, "Abdullah Ikra", 0.4, 2.5);
-    // iTextAdvanced(740, 200, "ID: 2405070", 0.3, 1.5);
 }
 
 void showSettings()
@@ -722,7 +806,6 @@ void showSettings()
 
     iTextBold(150, 200, "Secret BGM - '1' and '2'");
     iTextBold(150, 180, "Original BGM - '0'");
-    iTextBold(150, 140, "Press RMB to go back.");
 }
 
 void showLargeBox(int x1, int y1, int x2, int y2, int x3, int y3, char *word)
@@ -802,7 +885,7 @@ void showIconBox()
     iRectangle(1516 - 400, 816 - 225, 62, 62); // Sound Icon Box
     if (!soundON)
         iLine(1520 - 400 + 4, 824 - 225, 1566 - 400 + 4, 870 - 225); // Mark
-    iRectangle(1512 - 400, 30, 62, 62);                              // Settings
+    iRectangle(1512 - 400, 30, 62, 62);                              // Settings Icon Box
     iRectangle(1512 - 400, 100, 62, 62);                             // Leaderboard
 }
 
@@ -811,6 +894,46 @@ void showIcons()
     iShowLoadedImage(1516 - 400 + 5, 822 - 225, &sound_icon);    // Sound
     iShowLoadedImage(1512 - 400 + 6, 30 + 6, &settings_icon);    // Settings
     iShowLoadedImage(1512 - 400 + 5, 100 + 6, &high_score_icon); // Leaderboard
+}
+
+void displayWord(int wordIndex)
+{
+    if (wordIndex >= 0 && wordIndex < 5)
+    {
+        word_counter = wordIndex;
+        wordShow = true;
+        wordDisplayTimer = WORD_DISPLAY_DURATION;
+    }
+}
+
+void showWord()
+{
+    if (wordShow && word_counter >= 0 && word_counter < 5)
+    {
+        if (word_counter == 2 || word_counter == 4)
+        {
+            iSetColor(0, 255, 0);
+            iTextBold(VIEW_WIDTH / 2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
+        }
+        else if (word_counter == 1)
+        {
+            iSetColor(252, 73, 3);
+            iTextBold(VIEW_WIDTH / 2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
+        }
+        else if (word_counter == 0 || word_counter == 3)
+        {
+            iSetColor(252, 232, 3);
+            iTextBold(VIEW_WIDTH / 2 - 150, VIEW_HEIGHT - 100, word[word_counter], GLUT_BITMAP_TIMES_ROMAN_24);
+        }
+
+        // Decrease timer
+        wordDisplayTimer--;
+        if (wordDisplayTimer <= 0)
+        {
+            wordShow = false;
+            word_counter = -1;
+        }
+    }
 }
 
 char lifeStr[5], coinStr[5], scoreStr[5];
@@ -848,56 +971,47 @@ void showStatus()
     iTextBold(1422 - 400, 8, scoreStr, GLUT_BITMAP_TIMES_ROMAN_24);
 }
 
-void cleanupOldMapData(const char *playerName, int oldLevel)
+void cleanup_map_data(const char *playerName, int level)
 {
-    char filename[100];
-    sprintf(filename, "./game_data/map_%s_level_%d.txt", playerName, oldLevel);
-
-    FILE *testFile = fopen(filename, "r");
-    if (testFile)
+    for (int i = 0; i < level; i++)
     {
-        fclose(testFile);
-        if (unlink(filename) == 0)
+        char filename[100];
+        snprintf(filename, sizeof(filename), "./game_data/map_%s_level_%d.dat", playerName, i);
+
+        FILE *testFile = fopen(filename, "rb");
+        if (testFile)
         {
-            printf("Cleaned up old map data: %s\n", filename);
-        }
-        else
-        {
-            printf("Failed to delete: %s\n", filename);
+            fclose(testFile);
+            if (remove(filename))
+            {
+                printf("Cleaned up old map data: %s\n", filename);
+            }
+            else
+            {
+                // printf("Failed to delete: %s\n", filename);
+            }
         }
     }
 }
 
 void saveMapData(const char *playerName, int level)
 {
-    char filename[100];
-    sprintf(filename, "./game_data/map_%s_level_%d.txt", playerName, level);
+    char file[128];
+    snprintf(file, sizeof(file), "./game_data/map_%s_level_%d.dat", playerName, level);
 
-    FILE *fptr = fopen(filename, "w");
-    if (fptr == NULL)
+    FILE *f = fopen(file, "wb");
+    if (!f)
     {
-        printf("Error: Could not save map data for %s\n", playerName);
+        perror("saveMapData");
         return;
     }
 
     int rows = HEIGHT / Tile_Size;
     int cols = WIDTH / Tile_Size;
-
-    fprintf(fptr, "%d %d\n", rows, cols);
-
-    // Save the current map state
-    for (int i = 0; i < rows; i++)
-    {
-        for (int j = 0; j < cols; j++)
-        {
-            fprintf(fptr, "%d", map[i][j]);
-            if (j < cols - 1)
-                fprintf(fptr, " ");
-        }
-        fprintf(fptr, "\n");
-    }
-
-    fclose(fptr);
+    fwrite(&rows, sizeof(int), 1, f);
+    fwrite(&cols, sizeof(int), 1, f);
+    fwrite(map, sizeof(int), rows * cols, f);
+    fclose(f);
 }
 
 void savePlayerData(const player &p)
@@ -970,43 +1084,27 @@ void savePlayerData(const player &p)
 
 bool loadMapData(const char *playerName, int level)
 {
-    char filename[100];
-    sprintf(filename, "./game_data/map_%s_level_%d.txt", playerName, level);
+    char file[128];
+    snprintf(file, sizeof(file), "./game_data/map_%s_level_%d.dat", playerName, level);
 
-    FILE *fptr = fopen(filename, "rb");
-    if (!fptr)
+    FILE *f = fopen(file, "rb");
+    if (!f)
     {
         changeMap(level);
         return false;
     }
 
     int rows, cols;
-    if (fscanf(fptr, "%d %d", &rows, &cols) != 2)
+    if (fread(&rows, sizeof(int), 1, f) != 1 ||
+        fread(&cols, sizeof(int), 1, f) != 1 ||
+        rows != HEIGHT / Tile_Size || cols != WIDTH / Tile_Size ||
+        fread(map, sizeof(int), rows * cols, f) != (size_t)(rows * cols))
     {
-        // fclose(fptr);
+        fclose(f);
         changeMap(level);
         return false;
     }
-    if (rows != HEIGHT / Tile_Size || cols != WIDTH / Tile_Size)
-    {
-        fclose(fptr);
-        changeMap(level);
-        return false;
-    }
-    for (int i = 0; i < rows; i++)
-    {
-        for (int j = 0; j < cols; j++)
-        {
-            if (fscanf(fptr, "%d", &map[i][j]) != 1)
-            {
-                fclose(fptr);
-                changeMap(level);
-                return false;
-            }
-        }
-    }
-
-    fclose(fptr);
+    fclose(f);
     return true;
 }
 
@@ -1015,7 +1113,9 @@ bool loadPlayerData(const char *playerName, player *p)
     FILE *fptr = fopen("./game_data/player_info.txt", "r");
     if (!fptr)
     {
+
         system("mkdir -p game_data");
+
         return false; // File doesn't exist
     }
 
@@ -1051,12 +1151,35 @@ bool loadPlayerData(const char *playerName, player *p)
     {
         loadMapData(playerName, (*p).level);
     }
+
     return playerFound;
+}
+
+void cleanup()
+{
+    iFreeImage(&tile);
+    iFreeImage(&menu);
+    iFreeImage(&settings_page);
+    iFreeImage(&death_screen);
+    iFreeImage(&sound_icon);
+    iFreeImage(&settings_icon);
+    iFreeImage(&high_score_icon);
+
+    for (int i = 0; i < 7; ++i)
+    {
+        iFreeImage(&coin[i]);
+        iFreeImage(&shuriken[i]);
+        iFreeImage(&regainLife[i]);
+    }
+    for (int i = 0; i < 8; ++i)
+        iFreeImage(&portalG[i]);
+
+    cleanup_map_data(p1.name, p1.level);
 }
 
 void updateLevelMusic()
 {
-    if (gameState == Play && soundON)
+    if (gameState == Play && soundON) // Level Musics
     {
         iPauseSound(bgSound);
         iPauseSound(bgSound2);
@@ -1079,7 +1202,17 @@ void updateLevelMusic()
             break;
         }
     }
-    else if (gameState != Play && soundON)
+    else if (gameState == Died)
+    {
+
+        iPauseSound(bgSound);
+        iPauseSound(bgSound2);
+        iPauseSound(bgSound3);
+        iPauseSound(l1sound);
+        iPauseSound(l2sound);
+        iPauseSound(l3sound);
+    }
+    else if (gameState != Play && soundON) // Menu Musics
     {
         iPauseSound(l1sound);
         iPauseSound(l2sound);
@@ -1110,7 +1243,9 @@ void setLevel(int level, int x_tile, int y_tile)
 {
     saveMapData(p1.name, p1.level);
     p1.level = level;
+
     loadMapData(p1.name, level);
+
     p1.coor_x = x_tile * Tile_Size;
     p1.coor_y = y_tile * Tile_Size;
     updateLevelMusic();
@@ -1122,24 +1257,31 @@ void checkObject(player *p)
     int x_tile_r = ((*p).coor_x + (*p).pixel - 8) / Tile_Size;
     int y_tile = (HEIGHT / Tile_Size) - (((*p).coor_y + 16) / Tile_Size) - 1;
 
+    if (x_tile < 0 || x_tile >= WIDTH / Tile_Size ||
+        x_tile_r < 0 || x_tile_r >= WIDTH / Tile_Size ||
+        y_tile < 0 || y_tile >= HEIGHT / Tile_Size)
+    {
+        return;
+    }
+
     // Coin
     if (map[y_tile][x_tile] == Coin)
     {
         coin_counter++;
         p1.score += 100;
         map[y_tile][x_tile] = 0;
-        if (soundON)
-            iPlaySound("assets/Sounds/coin_collected.wav", false, 40);
+        iPlaySound("assets/Sounds/coin_collected.wav", false, 40);
         (*p).coins = coin_counter;
+        displayWord(0); // Show "COIN COLLECTED!"
     }
     else if (map[y_tile][x_tile_r] == Coin)
     {
         coin_counter++;
         p1.score += 50;
         map[y_tile][x_tile_r] = 0;
-        if (soundON)
-            iPlaySound("assets/Sounds/coin_collected.wav", false, 40);
+        iPlaySound("assets/Sounds/coin_collected.wav", false, 40);
         (*p).coins = coin_counter;
+        displayWord(0); // Show "COIN COLLECTED!"
     }
 
     // Shuriken
@@ -1147,37 +1289,80 @@ void checkObject(player *p)
     {
         map[y_tile][x_tile] = 0;
         life--;
-        if (soundON)
-            iPlaySound("assets/Sounds/damage_sound.wav", false, 40);
+        if (p1.score >= 100)
+            p1.score -= 100;
+        else
+            p1.score = 0;
         (*p).player_life = life;
+        displayWord(1); // Show "LIFE LOST! BE CAREFUL..."
+        if (life <= 0)
+        {
+            iPlaySound("assets/Sounds/death_sound.wav", false, 50);
+            gameState = Died;
+        }
     }
     else if (map[y_tile][x_tile_r] == Shuriken)
     {
         map[y_tile][x_tile_r] = 0;
         life--;
-        if (soundON)
-            iPlaySound("assets/Sounds/damage_sound.wav", false, 40);
         (*p).player_life = life;
+        displayWord(1); // Show "LIFE LOST! BE CAREFUL..."
+        if (life <= 0)
+        {
+            iPlaySound("assets/Sounds/death_sound.wav", false, 50);
+            gameState = Died;
+        }
     }
 
-    if (life <= 0)
+    else if (map[y_tile][x_tile] == Health)
     {
-        gameState = Blank;
+        map[y_tile][x_tile] = 0;
+        if (life < 3)
+        {
+            life++;
+            (*p).player_life = life;
+            displayWord(2); // Show "HEALTH REGAINED!!"
+        }
+        else if (life >= 3)
+        {
+            displayWord(5);
+        }
     }
+    else if (map[y_tile][x_tile_r] == Health)
+    {
+        map[y_tile][x_tile_r] = 0;
+        if (life < 3)
+        {
+            life++;
+            (*p).player_life = life;
+            displayWord(2); // Show "HEALTH REGAINED!!"
+        }
+    }
+
+    // if (life <= 0)
+    // {
+    //     iPlaySound("assets/Sounds/death_sound.wav", false, 50);
+    //     updateLevelMusic();
+    //     gameState = Died;
+    // }
 
     // Portal
     else if (map[y_tile][x_tile] == PortalG || map[y_tile][x_tile_r] == PortalG)
     {
+        displayWord(3);
         switch (gameLevel)
         {
         case 1:
-            setLevel(2, 2, 3); // Level 2
+            setLevel(2, (WIDTH / Tile_Size) - 2, 2); // Level 2
             break;
         case 2:
-            setLevel(3, 5, 17); // Level 3
+            setLevel(3, 48, (HEIGHT / Tile_Size) - 3); // Level 3
             break;
         case 3:
-            setLevel(1, 2, 2); // Level 1
+            gameState = Win;
+            break;
+        default:
+            iShowLoadedImage(0, 0, &death_screen);
             break;
         }
     }
@@ -1185,7 +1370,7 @@ void checkObject(player *p)
 
 void input_name()
 {
-    iSetColor(10, 10, 10); // Gray
+    iSetColor(10, 10, 10);
     iFilledRectangle(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
 
     int maxVisibleChars = 19;
@@ -1203,15 +1388,10 @@ void input_name()
 
 void iDraw()
 {
-    static auto lastTime = std::chrono::high_resolution_clock::now();
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    auto deltaTime = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastTime);
-
-    if (deltaTime.count() < 16)
-        return;
-    lastTime = currentTime;
-
-    moveCam();
+    if (gameState == Play)
+    {
+        moveCam();
+    }
 
     iClear();
 
@@ -1228,6 +1408,7 @@ void iDraw()
         savePlayerData(p1);
         showPlayerAnimation(p1);
         showStatus();
+        showWord();
         break;
     case Instructions:
         showInstructionsPage();
@@ -1241,35 +1422,22 @@ void iDraw()
     case NameInput:
         input_name();
         break;
-    case Blank:
+    case Died:
         iClear();
-        iSetColor(255, 255, 255);
-        iTextAdvanced(630, 500, "YOU DIED!", 0.4, 5.0);
+
+        iSetColor(255, 100, 100);
         iShowLoadedImage(0, 0, &death_screen);
+        iTextAdvanced(200, 100, "Press 'p' to show leaderboard!", 0.4, 5.0);
         iDelay(1);
-        iShowLoadedImage(0, 0, &death_screen);
+        break;
+    case Win:
+        iClear();
+        iShowLoadedImage(0, 0, &win_screen);
         break;
     case Leaderboard:
         showLeaderboard();
         break;
     }
-}
-
-void cleanup()
-{
-    iFreeImage(&tile);
-    iFreeImage(&menu);
-    for (int i = 0; i < 7; i++)
-    {
-        iFreeImage(&coin[i]);
-        iFreeImage(&shuriken[i]);
-    }
-    for (int i = 0; i < 8; i++)
-    {
-        iFreeImage(&portalG[i]);
-    }
-
-    cleanupOldMapData(p1.name, p1.level - 1);
 }
 
 void iKeyboard(unsigned char key)
@@ -1285,7 +1453,7 @@ void iKeyboard(unsigned char key)
             gameState = Menu;
             updateLevelMusic();
         }
-        else if (gameState == Blank)
+        else if (gameState == Died || gameState == Win)
         {
             savePlayerData(p1);
             saveMapData(p1.name, p1.level);
@@ -1293,7 +1461,6 @@ void iKeyboard(unsigned char key)
             gameState = Leaderboard;
             updateLevelMusic();
         }
-
         break;
     case 'm':
         if (gameState != NameInput)
@@ -1360,8 +1527,9 @@ void iKeyboard(unsigned char key)
         {
             if (isNewGame)
             {
-                // Starting a new game
+                // cleanup();
                 initPlayer(&p1, 2, 2);
+                word_counter = -1;
                 p1.score = 0;
                 p1.coins = 0;
                 p1.level = 1;
@@ -1381,6 +1549,7 @@ void iKeyboard(unsigned char key)
                 if (loadPlayerData(playerNameInput, &p1))
                 {
                     // Player found and data loaded
+
                     life = p1.player_life;
                     coin_counter = p1.coins;
                     if (!loadMapData(p1.name, p1.level))
@@ -1388,13 +1557,15 @@ void iKeyboard(unsigned char key)
                         // No saved map, fallback to default
                         printf("No map data found, loading default map...\n");
                     }
+
                     gameState = Play;
                     updateLevelMusic();
                 }
                 else
                 {
-                    // Player not found, treat as a new game
+                    // cleanup();
                     initPlayer(&p1, 2, 2);
+                    word_counter = -1;
                     strcpy(p1.name, playerNameInput);
                     p1.score = 0;
                     p1.coins = 0;
@@ -1425,7 +1596,26 @@ void iKeyboard(unsigned char key)
         return;
     }
 }
-void iSpecialKeyboard(unsigned char key) {}
+void iSpecialKeyboard(unsigned char key)
+{
+    switch (key)
+    {
+    case GLUT_KEY_UP:
+        if (gameState == Leaderboard)
+        {
+            leaderboardScroll = max(0, leaderboardScroll - 1);
+        }
+        break;
+    case GLUT_KEY_DOWN:
+        if (gameState == Leaderboard)
+        {
+            std::vector<player> players = getSortedPlayers();
+            int maxScroll = max(0, static_cast<int>(players.size()) - 12);
+            leaderboardScroll = min(maxScroll, leaderboardScroll + 1);
+        }
+        break;
+    }
+}
 void iSpecialKeyboardUp(unsigned char key) {}
 
 void iMouseDrag(int x, int y) {}
@@ -1530,7 +1720,7 @@ void iMouse(int button, int state, int mx, int my)
             {
                 gameState = Settings;
             }
-            else if ((mx >= 1512 - 400 && mx <= 1512 - 400 + 62) && (my >= 100 && my <= 100 + 62)) // Leaderboard
+            else if ((mx >= 1512 - 400 && mx <= 1512 - 400 + 62) && (my >= 100 && my <= 100 + 62)) // leaderboard
             {
                 gameState = Leaderboard;
             }
@@ -1566,12 +1756,13 @@ void iMouse(int button, int state, int mx, int my)
             gameState = Menu;
     }
 }
+
 void iMouseWheel(int dir, int x, int y)
 {
     if (gameState == Instructions || gameState == Leaderboard)
     {
-        ScrollY += (dir > 0 ? 30 : -30); // scroll up/down
-        ScrollY = max(0, min(ScrollY, maxScrollY));
+        instructionScrollY += (dir > 0 ? 30 : -30); // scroll up/down
+        instructionScrollY = max(0, min(instructionScrollY, maxScrollY));
     }
 }
 
@@ -1586,6 +1777,7 @@ void updateObjectsIndices() // 150ms
     coin_index = (coin_index + 1) % 7;
     shuriken_index = (shuriken_index + 1) % 7;
     portal_index = (portal_index + 1) % 8;
+    regainLife_index = (regainLife_index + 1) % 7;
 }
 
 void gameLogic() // 10ms
@@ -1649,7 +1841,7 @@ void initSound()
 void addScore() // 750ms
 {
     if (p1.run != 0)
-        p1.score += 2;
+        p1.score += 1;
 }
 
 int main(int argc, char *argv[])
@@ -1659,7 +1851,7 @@ int main(int argc, char *argv[])
     changeMap(1);
     loadResources();
     load_objects();
-    initPlayer(&p1, 7, 7);
+    initPlayer(&p1, 2, 2);
 
     iSetTimer(50, motion);
     iSetTimer(10, gameLogic);
@@ -1669,6 +1861,6 @@ int main(int argc, char *argv[])
 
     iInitializeSound();
     initSound();
-    iInitialize(VIEW_WIDTH, VIEW_HEIGHT, "Platformer - DingDingDong");
+    iInitialize(VIEW_WIDTH, VIEW_HEIGHT, "Platformer - Player Animation");
     return 0;
 }
